@@ -170,12 +170,10 @@ function loadMenu(){
   }).catch(fail);
 }
 function drawMenu(){
-  var byBox = !(JOB.sheet==='BACKUP' && JOB.mode==='pick');
-  var label = byBox ? 'box' : 'GK shelf';
   var left = MENU.filter(function(x){ return x.state!=='Complete'; }).length;
-  var h = '<input class="search" id="q" placeholder="Search '+label+'…">'+
-          '<div class="muted" style="margin-bottom:8px">'+left+' '+label+
-          (left===1?'':'es')+' still open · '+(MENU.length-left)+' complete</div><div id="list"></div>';
+  var h = '<input class="search" id="q" placeholder="Search box or GK shelf…">'+
+          '<div class="muted" style="margin-bottom:8px">'+left+' box'+(left===1?'':'es')+
+          ' still open · '+(MENU.length-left)+' complete</div><div id="list"></div>';
   el('app').innerHTML=h;
   el('q').addEventListener('input', renderList);
   renderList();
@@ -185,18 +183,18 @@ function renderList(){
   var q=(el('q').value||'').toLowerCase();
   var rows=MENU.filter(function(x){
     return String(x.key).toLowerCase().indexOf(q)>=0
-        || (x.boxes||[]).join(' ').toLowerCase().indexOf(q)>=0; });
+        || (x.locs||[]).join(' ').toLowerCase().indexOf(q)>=0; });
   el('list').innerHTML = rows.length ? rows.map(function(x){
     var right = (JOB.mode==='pack' && x.waiting)
       ? '<span class="pill ready">'+x.waiting+' ready to price</span>'
       : (x.open ? '<span class="pill">'+x.open+' lines · '+x.copies+' copies</span>' : '');
-    var boxes = (x.boxes && x.boxes.length)
-      ? '<div class="meta" style="margin-top:6px">into '+x.boxes.length+' box'+
-        (x.boxes.length===1?'':'es')+': <b>'+x.boxes.map(esc).join('</b>, <b>')+'</b></div>' : '';
+    var locs = (JOB.mode==='pick' && x.locs && x.locs.length)
+      ? '<div class="meta" style="margin-top:6px">from '+x.locs.length+' shelf'+
+        (x.locs.length===1?'':'s')+': <b>'+x.locs.map(esc).join('</b>, <b>')+'</b></div>' : '';
     return '<div class="row '+(x.state==='Complete'?'done':'')+'" onclick="openKey(\''+esc(x.key)+'\')">'+
       '<div class="key"><b>'+esc(x.key)+'</b>'+
       '<span class="pill '+stateClass(x.state)+'">'+x.state+'</span></div>'+
-      (right?'<div style="margin-top:6px">'+right+'</div>':'')+boxes+'</div>';
+      (right?'<div style="margin-top:6px">'+right+'</div>':'')+locs+'</div>';
   }).join('') : '<div class="empty">Nothing here.</div>';
 }
 
@@ -227,9 +225,8 @@ function lineHtml(l, pick, needsPrice){
   var short = l.pickedQty!=null && l.pickedQty<l.qty;
   var cls = done ? 'row done' : (short ? 'row part' : 'row');
   var want = pick ? l.qty : (l.pickedQty!=null?l.pickedQty:l.qty);
-  // show whichever end of the journey is NOT the grouping key
-  var byShelf = (JOB.sheet==='BACKUP' && JOB.mode==='pick');
-  var where = byShelf ? ('into box <b>'+esc(l.box)+'</b>') : ('from <b>'+esc(l.loc)+'</b>');
+  // every job is grouped by box, so each line shows the GK shelf to walk to
+  var where = 'from <b>'+esc(l.loc)+'</b>';
   var s = '<div class="'+cls+'" id="r_'+l.id+'">'+
     '<div class="title">'+esc(l.title)+'</div>'+
     '<div class="meta">'+esc(l.isbn)+(l.author?' · '+esc(l.author):'')+'</div>'+
