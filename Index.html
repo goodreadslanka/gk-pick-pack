@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>GK Pick &amp; Pack</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink:#111; --line:#c9ccd1; --soft:#f4f5f7; --ok:#1b7f3b; --warn:#8a6100; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+         color:var(--ink); background:#fff; padding-bottom:86px; }
+  header { position:sticky; top:0; background:#fff; border-bottom:2px solid var(--ink);
+           padding:8px 12px calc(8px + env(safe-area-inset-top)); z-index:5; }
+  .top { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+  h1 { font-size:16px; margin:0; }
+  .tabs { display:flex; gap:5px; margin-top:7px; }
+  .tab { flex:1; padding:8px 3px; text-align:center; border:1px solid var(--line); border-radius:6px;
+         background:var(--soft); font-weight:600; font-size:12px; line-height:1.25; }
+  .tab.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .tab small { display:block; font-weight:500; font-size:10px; opacity:.75; }
+  .wrap { padding:10px 12px; }
+  .muted { color:#666; font-size:12px; }
+  input,select,button { font:inherit; }
+  .search { width:100%; padding:10px; border:1px solid var(--line); border-radius:6px; margin-bottom:10px; }
+  .row { border:1px solid var(--line); border-radius:8px; padding:10px; margin-bottom:8px; }
+  .row.done { background:#f0f7f1; border-color:#9ccfa8; }
+  .row.part { background:#fff8e6; border-color:#e2c27a; }
+  .key { display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .key b { font-size:16px; }
+  .pill { font-size:11px; border:1px solid var(--line); border-radius:99px; padding:2px 9px; white-space:nowrap; }
+  .pill.ready { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .pill.ok { background:#e6f3e9; border-color:#9ccfa8; color:var(--ok); }
+  .pill.go { background:#fff3d6; border-color:#e2c27a; color:var(--warn); }
+  .title { font-weight:600; margin:2px 0; }
+  .meta { font-size:12px; color:#555; }
+  .qtyline { display:flex; align-items:center; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .qty { width:64px; padding:8px; border:1px solid var(--line); border-radius:6px; text-align:center; font-weight:700; }
+  .price { width:96px; padding:8px; border:1px solid var(--line); border-radius:6px; text-align:right; }
+  button { padding:10px 14px; border:1px solid var(--ink); background:var(--ink); color:#fff;
+           border-radius:6px; font-weight:600; }
+  button.ghost { background:#fff; color:var(--ink); }
+  button:disabled { opacity:.45; }
+  .bar { position:fixed; left:0; right:0; bottom:0; background:#fff; border-top:2px solid var(--ink);
+         padding:9px 12px calc(9px + env(safe-area-inset-bottom)); display:flex; gap:8px; align-items:center; }
+  .bar .grow { flex:1; font-size:12px; }
+  .back { background:none; border:none; color:var(--ink); padding:0 0 6px; font-weight:600; }
+  .empty { padding:30px 10px; text-align:center; color:#666; }
+  .toast { position:fixed; left:12px; right:12px; bottom:80px; background:var(--ink); color:#fff;
+           padding:10px 12px; border-radius:6px; font-size:13px; display:none; z-index:9; }
+</style>
+</head>
+<body>
+
+<div id="boot" style="display:none;padding:14px;margin:12px;border:2px solid #111;
+     border-radius:8px;font:13px/1.5 monospace;white-space:pre-wrap"></div>
+
+<div id="main">
+  <header>
+    <div class="top">
+      <h1 id="hdr">GK Pick &amp; Pack</h1>
+      <span class="muted" id="whoami"></span>
+    </div>
+    <div class="tabs">
+      <div class="tab on" data-job="PICK-pick">Pick · Fair<small id="s0">–</small></div>
+      <div class="tab" data-job="PICK-pack">Price &amp; Box<small id="s1">–</small></div>
+      <div class="tab" data-job="BACKUP-pick">Pick · Backup<small id="s2">–</small></div>
+      <div class="tab" data-job="BACKUP-pack">Box · Backup<small id="s3">–</small></div>
+    </div>
+  </header>
+
+  <div class="wrap" id="app"><div class="empty">Loading…</div></div>
+
+  <div class="bar">
+    <div class="grow" id="status">Ready</div>
+    <button class="ghost" id="refresh">↻</button>
+    <button id="save" disabled>Save</button>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+
+
+<script>
+window.onerror = function(msg, src, line){
+  // Cross-origin scripts report "Script error." with no detail. Never let that
+  // look like a fatal startup problem — the app itself is fine.
+  if (!msg || String(msg).indexOf('Script error') === 0) return true;
+  var b = document.getElementById('boot');
+  if (b) { b.style.display='block'; b.textContent = 'Error: ' + msg + ' (line ' + line + ')'; }
+  return true;
+};
+/* ---------------- config ---------------- */
+var JOB = { sheet:'PICK', mode:'pick' };
+var MENU = [], VIEW = null, PENDING = {}, PROG = null;
+
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+  return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function toast(m){ var t=el('toast'); t.textContent=m; t.style.display='block';
+  clearTimeout(t._t); t._t=setTimeout(function(){ t.style.display='none'; },2800); }
+function setStatus(s){ el('status').textContent=s; }
+function dirty(){ var n=Object.keys(PENDING).length;
+  el('save').disabled=!n; el('save').textContent=n?('Save '+n):'Save'; }
+
+/* ---------------- transport ----------------
+   Served by Apps Script, so calls go straight through google.script.run.
+   No URL to configure and no CORS to worry about. */
+function call(fn, args){
+  return new Promise(function(res, rej){
+    google.script.run
+      .withSuccessHandler(res)
+      .withFailureHandler(function(e){ rej(new Error(e && e.message ? e.message : String(e))); })
+      [fn].apply(null, args || []);
+  });
+}
+function api(p){
+  if (p.action === 'menu')     return call('getMenu',     [p.sheet, p.mode]);
+  if (p.action === 'lines')    return call('getLines',    [p.sheet, p.mode, p.key]);
+  if (p.action === 'progress') return call('getProgress', []);
+  if (p.action === 'ping')     return call('getProgress', []);
+  return Promise.reject(new Error('Unknown action ' + p.action));
+}
+function apiPost(p){ return call('submit', [p.sheet, p.updates, null]); }
+
+/* ---------------- progress on the tabs ---------------- */
+function refreshProgress(){
+  api({action:'progress'}).then(function(p){
+    PROG=p;
+    el('s0').textContent = p.PICK.pickState;
+    el('s1').textContent = p.PICK.packState;
+    el('s2').textContent = p.BACKUP.pickState;
+    el('s3').textContent = p.BACKUP.packState;
+  }).catch(function(){});
+}
+
+/* ---------------- menu ---------------- */
+function loadMenu(){
+  VIEW=null; PENDING={}; dirty();
+  el('app').innerHTML='<div class="empty">Loading…</div>'; setStatus('Loading…');
+  api({action:'menu', sheet:JOB.sheet, mode:JOB.mode}).then(function(m){
+    MENU=m; drawMenu(); setStatus('Ready'); refreshProgress();
+  }).catch(fail);
+}
+function drawMenu(){
+  var left = MENU.filter(function(x){ return x.state!=='Complete'; }).length;
+  var h = '<input class="search" id="q" placeholder="Search box or GK shelf…">'+
+          '<div class="muted" style="margin-bottom:8px">'+left+' box'+(left===1?'':'es')+
+          ' still open · '+(MENU.length-left)+' complete</div><div id="list"></div>';
+  el('app').innerHTML=h;
+  el('q').addEventListener('input', renderList);
+  renderList();
+}
+function stateClass(s){ return s==='Complete'?'ok':(s==='Ongoing'?'go':''); }
+function renderList(){
+  var q=(el('q').value||'').toLowerCase();
+  var rows=MENU.filter(function(x){
+    return String(x.key).toLowerCase().indexOf(q)>=0
+        || (x.locs||[]).join(' ').toLowerCase().indexOf(q)>=0; });
+  el('list').innerHTML = rows.length ? rows.map(function(x){
+    var right = (JOB.mode==='pack' && x.waiting)
+      ? '<span class="pill ready">'+x.waiting+' ready to price</span>'
+      : (x.open ? '<span class="pill">'+x.open+' lines · '+x.copies+' copies</span>' : '');
+    var locs = (JOB.mode==='pick' && x.locs && x.locs.length)
+      ? '<div class="meta" style="margin-top:6px">from '+x.locs.length+' shelf'+
+        (x.locs.length===1?'':'s')+': <b>'+x.locs.map(esc).join('</b>, <b>')+'</b></div>' : '';
+    return '<div class="row '+(x.state==='Complete'?'done':'')+'" onclick="openKey(\''+esc(x.key)+'\')">'+
+      '<div class="key"><b>'+esc(x.key)+'</b>'+
+      '<span class="pill '+stateClass(x.state)+'">'+x.state+'</span></div>'+
+      (right?'<div style="margin-top:6px">'+right+'</div>':'')+locs+'</div>';
+  }).join('') : '<div class="empty">Nothing here.</div>';
+}
+
+/* ---------------- lines ---------------- */
+function openKey(key){
+  setStatus('Loading '+key+'…');
+  api({action:'lines', sheet:JOB.sheet, mode:JOB.mode, key:key}).then(function(v){
+    VIEW=v; PENDING={}; dirty(); drawLines(); setStatus('Ready');
+  }).catch(fail);
+}
+function drawLines(){
+  var v=VIEW, pick=(v.mode==='pick');
+  var todo=v.lines.filter(function(l){ return pick ? l.status==='TO PICK' : l.status==='PICKED'; });
+  var state = todo.length===0 ? 'Complete'
+            : (v.lines.some(function(l){ return pick ? l.status!=='TO PICK' : l.status==='PACKED'; })
+               ? 'Ongoing' : 'Not started');
+  var h='<button class="back" onclick="loadMenu()">‹ Back</button>'+
+        '<div class="key" style="margin-bottom:8px"><b>'+esc(v.key)+'</b>'+
+        '<span class="pill '+stateClass(state)+'">'+state+'</span></div>';
+  if(!v.lines.length) h+='<div class="empty">Nothing outstanding here.</div>';
+  h += v.lines.map(function(l){ return lineHtml(l, pick, v.needsPrice); }).join('');
+  if(todo.length>1) h+='<button class="ghost" style="width:100%;margin-top:6px" onclick="markAll()">'+
+      (pick?'Mark all picked':'Mark all packed')+'</button>';
+  el('app').innerHTML=h;
+}
+function lineHtml(l, pick, needsPrice){
+  var done = pick ? (l.status!=='TO PICK') : (l.status==='PACKED');
+  var short = l.pickedQty!=null && l.pickedQty<l.qty;
+  var cls = done ? 'row done' : (short ? 'row part' : 'row');
+  var want = pick ? l.qty : (l.pickedQty!=null?l.pickedQty:l.qty);
+  // every job is grouped by box, so each line shows the GK shelf to walk to
+  var where = 'from <b>'+esc(l.loc)+'</b>';
+  var s = '<div class="'+cls+'" id="r_'+l.id+'">'+
+    '<div class="title">'+esc(l.title)+'</div>'+
+    '<div class="meta">'+esc(l.isbn)+(l.author?' · '+esc(l.author):'')+'</div>'+
+    '<div class="meta">'+where+' · '+esc(l.category||'')+'</div>';
+  if(done){
+    s += '<div class="qtyline"><span class="pill">'+(pick?'picked ':'packed ')+want+
+         (!pick && l.price!=null ? ' · Rs. '+l.price : '')+'</span>'+
+         '<button class="ghost" onclick="undo(\''+l.id+'\')">Undo</button></div>';
+  } else {
+    s += '<div class="qtyline"><span class="muted">Qty</span>'+
+         '<input class="qty" id="q_'+l.id+'" type="number" inputmode="numeric" value="'+want+'" min="0">';
+    if(!pick && needsPrice){
+      s += '<span class="muted">Rs.</span><input class="price" id="p_'+l.id+
+           '" type="number" inputmode="decimal" value="'+(l.price==null?'':l.price)+'" placeholder="price">';
+    }
+    s += '<button onclick="mark(\''+l.id+'\')">'+(pick?'Picked':'Packed')+'</button></div>';
+    if(!pick && needsPrice && l.price==null)
+      s += '<div class="meta" style="color:#8a6100">No price on file — scan the book or type it.</div>';
+  }
+  return s+'</div>';
+}
+
+/* ---------------- actions ---------------- */
+function mark(id){
+  var l = VIEW.lines.filter(function(x){ return x.id===id; })[0];
+  var qty = Number((el('q_'+id)||{}).value);
+  if(isNaN(qty) || qty<0){ toast('Check the quantity'); return; }
+  var price=null;
+  if(VIEW.mode==='pack' && VIEW.needsPrice){
+    var pv=(el('p_'+id)||{}).value;
+    if(pv==='' || isNaN(Number(pv))){ toast('Price this one first'); return; }
+    price=Number(pv);
+  }
+  PENDING[id]={ id:id, action:(VIEW.mode==='pick'?'pick':'pack'), qty:qty, price:price,
+                note:(qty<l.qty ? 'short by '+(l.qty-qty) : '') };
+  l.status = VIEW.mode==='pick' ? 'PICKED' : 'PACKED';
+  l.pickedQty=qty; if(price!=null) l.price=price;
+  drawLines(); dirty();
+}
+function markAll(){
+  VIEW.lines.forEach(function(l){
+    var open = VIEW.mode==='pick' ? l.status==='TO PICK' : l.status==='PICKED';
+    if(!open) return;
+    if(VIEW.mode==='pack' && VIEW.needsPrice && l.price==null) return;
+    mark(l.id);
+  });
+}
+function undo(id){
+  PENDING[id]={ id:id, action:'undo', qty:0 };
+  var l=VIEW.lines.filter(function(x){ return x.id===id; })[0];
+  l.status = VIEW.mode==='pick' ? 'TO PICK' : 'PICKED';
+  drawLines(); dirty();
+}
+function save(){
+  var ups=Object.keys(PENDING).map(function(k){ return PENDING[k]; });
+  if(!ups.length) return;
+  el('save').disabled=true; setStatus('Saving '+ups.length+'…');
+  apiPost({action:'submit', sheet:JOB.sheet, updates:ups}).then(function(r){
+    PENDING={}; dirty(); setStatus('Saved '+r.saved);
+    toast('Saved '+r.saved+(r.skipped?(' · '+r.skipped+' already done by someone else'):''));
+    VIEW ? openKey(VIEW.key) : loadMenu();
+  }).catch(function(e){ el('save').disabled=false; fail(e); });
+}
+function fail(e){ setStatus('Error'); toast(e && e.message ? e.message : 'Something went wrong'); }
+
+/* ---------------- wiring ---------------- */
+document.querySelectorAll('.tab').forEach(function(t){
+  t.addEventListener('click', function(){
+    if(Object.keys(PENDING).length && !confirm('You have unsaved lines. Leave anyway?')) return;
+    document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('on'); });
+    t.classList.add('on');
+    var p=t.dataset.job.split('-'); JOB={ sheet:p[0], mode:p[1] };
+    el('hdr').textContent=(JOB.sheet==='PICK'?'Fair':'Backup')+' — '+(JOB.mode==='pick'?'pick':'pack');
+    loadMenu();
+  });
+});
+el('save').addEventListener('click', save);
+el('refresh').addEventListener('click', function(){ VIEW ? openKey(VIEW.key) : loadMenu(); });
+window.addEventListener('beforeunload', function(e){
+  if(Object.keys(PENDING).length){ e.preventDefault(); e.returnValue=''; }
+});
+el('main').style.display='block';
+call('whoAmI').then(function(n){ el('whoami').textContent=n; }).catch(function(){});
+loadMenu();
+</script>
+</body>
+</html>
