@@ -60,6 +60,9 @@
 </head>
 <body>
 
+<div id="boot" style="display:none;padding:14px;margin:12px;border:2px solid #111;
+     border-radius:8px;font:13px/1.5 monospace;white-space:pre-wrap"></div>
+
 <div id="setup" class="setup" style="display:none">
   <h1>GK Pick &amp; Pack — first run</h1>
   <p class="muted">Ask your supervisor for the web app link. It is stored on this
@@ -70,6 +73,7 @@
   <input id="cfgUser" placeholder="e.g. Nimal">
   <p><button id="cfgSave" style="width:100%;margin-top:14px">Start</button></p>
   <p class="muted" id="cfgMsg"></p>
+  <p class="muted"><a href="#" id="reset">Forget the saved link and start again</a></p>
 </div>
 
 <div id="main" style="display:none">
@@ -109,8 +113,14 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <script>
+/* The scanner library is NOT loaded here on purpose. Loading it up front from
+   a CDN blocks the whole page if that CDN is slow or blocked, and the app
+   never draws. It is fetched only when Scan is tapped. */
+window.onerror = function(msg, src, line){
+  var b = document.getElementById('boot');
+  if (b) { b.style.display='block'; b.textContent = 'Startup error: ' + msg + ' (line ' + line + ')'; }
+};
 /* ---------------- config ---------------- */
 var CFG = { url: localStorage.getItem('gk_url') || '', user: localStorage.getItem('gk_user') || '' };
 var JOB = { sheet:'PICK', mode:'pick' };
@@ -131,7 +141,7 @@ function dirty(){ var n=Object.keys(PENDING).length;
 function api(params){
   return new Promise(function(res, rej){
     var cb = 'cb'+Math.random().toString(36).slice(2);
-    var t = setTimeout(function(){ cleanup(); rej(new Error('No answer — check the link or the signal')); }, 30000);
+    var t = setTimeout(function(){ cleanup(); rej(new Error('No answer from the web app — check the link, the deployment access, or the signal')); }, 20000);
     function cleanup(){ clearTimeout(t); delete window[cb]; if(s.parentNode) s.parentNode.removeChild(s); }
     window[cb] = function(r){ cleanup(); r && r.ok ? res(r.data) : rej(new Error(r && r.error || 'Failed')); };
     var q = Object.keys(params).map(function(k){
@@ -293,19 +303,40 @@ function save(){
 function fail(e){ setStatus('Error'); toast(e && e.message ? e.message : 'Something went wrong'); }
 
 /* ---------------- barcode ---------------- */
+var SCAN_SRC = [
+  'https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js',
+  'https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js'
+];
+function loadScanner(){
+  if (window.Html5Qrcode) return Promise.resolve();
+  if (window._scanLoading) return window._scanLoading;
+  window._scanLoading = SCAN_SRC.reduce(function(chain, url){
+    return chain.catch(function(){
+      return new Promise(function(res, rej){
+        var s=document.createElement('script'); s.src=url; s.async=true;
+        var t=setTimeout(function(){ s.onerror(); }, 12000);
+        s.onload=function(){ clearTimeout(t); window.Html5Qrcode ? res() : rej(new Error('bad load')); };
+        s.onerror=function(){ clearTimeout(t); if(s.parentNode) s.parentNode.removeChild(s); rej(new Error('cdn')); };
+        document.body.appendChild(s);
+      });
+    });
+  }, Promise.reject());
+  return window._scanLoading;
+}
 function openScan(){
   el('scan').style.display='block';
-  el('scanInfo').textContent='Point the camera at the barcode on the back of the book.';
-  if(!window.Html5Qrcode){ el('scanInfo').textContent='Scanner failed to load. Type the ISBN instead.'; return; }
-  scanner = new Html5Qrcode('reader', { formatsToSupport:[
-      Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
-      Html5QrcodeSupportedFormats.UPC_A,  Html5QrcodeSupportedFormats.CODE_128 ] });
-  scanner.start({ facingMode:'environment' },
-    { fps:10, qrbox:{ width:280, height:160 } },
-    function(text){ if(navigator.vibrate) navigator.vibrate(60); lookup(text); },
-    function(){}
-  ).catch(function(e){
-    el('scanInfo').textContent='Camera blocked: '+e+'. Type the ISBN instead.';
+  el('scanInfo').textContent='Starting the camera…';
+  loadScanner().then(function(){
+    el('scanInfo').textContent='Point the camera at the barcode on the back of the book.';
+    scanner = new Html5Qrcode('reader', { formatsToSupport:[
+        Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,  Html5QrcodeSupportedFormats.CODE_128 ] });
+    return scanner.start({ facingMode:'environment' },
+      { fps:10, qrbox:{ width:280, height:160 } },
+      function(text){ if(navigator.vibrate) navigator.vibrate(60); lookup(text); },
+      function(){});
+  }).catch(function(e){
+    el('scanInfo').textContent='Camera or scanner unavailable ('+(e&&e.message||e)+'). Type the ISBN below instead.';
   });
 }
 function closeScan(){
@@ -389,12 +420,18 @@ el('cfgSave').addEventListener('click', function(){
     localStorage.setItem('gk_url',u); localStorage.setItem('gk_user',n); start();
   }).catch(function(e){ el('cfgMsg').textContent=e.message; });
 });
+el('reset').addEventListener('click', function(e){
+  e.preventDefault();
+  localStorage.removeItem('gk_url'); localStorage.removeItem('gk_user');
+  el('cfgUrl').value=''; el('cfgUser').value=''; el('cfgMsg').textContent='Cleared. Enter the link again.';
+});
 function start(){
   el('setup').style.display='none'; el('main').style.display='block';
   el('whoami').textContent=CFG.user;
   loadMenu();
 }
-if(CFG.url && CFG.user) start(); else el('setup').style.display='block';
+if(CFG.url && CFG.user){ el('cfgUrl').value=CFG.url; el('cfgUser').value=CFG.user; start(); }
+else { el('cfgUrl').value=CFG.url; el('cfgUser').value=CFG.user; el('setup').style.display='block'; }
 </script>
 </body>
 </html>
