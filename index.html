@@ -114,7 +114,7 @@
 /* ---------------- config ---------------- */
 var CFG = { url: localStorage.getItem('gk_url') || '', user: localStorage.getItem('gk_user') || '' };
 var JOB = { sheet:'PICK', mode:'pick' };
-var MENU = [], VIEW = null, PENDING = {}, PROG = null, scanner = null;
+var MENU = [], VIEW = null, PENDING = {}, PROG = null, scanner = null, LAST = null;
 
 function el(id){ return document.getElementById(id); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){
@@ -313,27 +313,41 @@ function lookup(code){
   if(isbn.length<8){ toast('Not a book barcode'); return; }
   el('scanInfo').textContent='Looking up '+isbn+'…';
   api({action:'find', isbn:isbn, sheet:JOB.sheet}).then(function(r){
-    if(!r.found){ el('scanInfo').innerHTML='<b>'+isbn+'</b> is not in this job.'; return; }
-    var price = r.price==null ? '<b style="color:#8a6100">no price on file</b>'
-                              : '<b>Rs. '+r.price+'</b>';
+    LAST=r;
+    if(!r.found){ el('scanInfo').innerHTML='<b>'+isbn+'</b> is not in either job.'; return; }
+    var price = r.price==null
+      ? '<b style="color:#8a6100">No price anywhere — type one below</b>'
+      : '<b>Rs. '+r.price+'</b>'+(r.priceFrom&&r.priceFrom!==JOB.sheet
+          ? ' <span class="muted">(from the '+(r.priceFrom==='PICK'?'fair':'backup')+' list)</span>' : '');
     var where = r.lines.map(function(l){
-      return l.box+' · '+l.status+(l.loc?' · from '+l.loc:''); }).join('<br>');
+      return (l.sheet==='PICK'?'Fair':'Backup')+' · '+l.box+' · '+l.status+
+             (l.loc?' · from '+l.loc:'')+(l.qty?' · '+l.qty+' copies':''); }).join('<br>');
     el('scanInfo').innerHTML = '<div style="font-weight:600">'+esc(r.title)+'</div>'+
       '<div>'+price+'</div><div class="muted" style="margin-top:4px">'+where+'</div>'+
       '<div class="qtyline"><input class="price" id="scanPrice" type="number" inputmode="decimal" '+
-      'placeholder="new price" value="'+(r.price==null?'':r.price)+'">'+
-      '<button onclick="savePrice(\''+isbn+'\')">Save price</button></div>';
+      'placeholder="price" value="'+(r.price==null?'':r.price)+'">'+
+      '<button onclick="savePrice()">Save price</button></div>';
     highlight(isbn);
   }).catch(function(e){ el('scanInfo').textContent=e.message; });
 }
-function savePrice(isbn){
+function savePrice(){
+  if(!LAST || !LAST.found){ toast('Scan a book first'); return; }
   var p=Number(el('scanPrice').value);
   if(isNaN(p)||p<=0){ toast('Enter a price'); return; }
-  api({action:'find', isbn:isbn, sheet:JOB.sheet}).then(function(r){
-    var ups=r.lines.map(function(l){ return { id:l.id, action:'price', price:p }; });
-    return apiPost({action:'submit', sheet:JOB.sheet, updates:ups});
-  }).then(function(res){
-    toast('Price saved on '+res.saved+' line'+(res.saved===1?'':'s'));
+  // write to every line for this ISBN, in whichever sheet it sits
+  var bySheet={};
+  LAST.lines.forEach(function(l){
+    (bySheet[l.sheet]=bySheet[l.sheet]||[]).push({ id:l.id, action:'price', price:p });
+  });
+  var names=Object.keys(bySheet), total=0;
+  names.reduce(function(chain,name){
+    return chain.then(function(){
+      return apiPost({action:'submit', sheet:name, updates:bySheet[name]})
+        .then(function(res){ total+=res.saved; });
+    });
+  }, Promise.resolve()).then(function(){
+    toast('Rs. '+p+' saved on '+total+' line'+(total===1?'':'s'));
+    LAST.price=p;
     if(VIEW) openKey(VIEW.key);
   }).catch(fail);
 }
